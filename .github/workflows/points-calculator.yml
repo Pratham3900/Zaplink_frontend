@@ -1,13 +1,5 @@
 name: Points Calculator
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Triggers on PR close (merged or abandoned). The job condition below filters
-# to merged-only. pull_request_target is used for the same reason as the
-# validator: so GITHUB_TOKEN retains write access even for fork PRs.
-#
-# IMPORTANT: contents: write is required here because this job commits the
-# updated leaderboard JSON file back to the repository.
-# ─────────────────────────────────────────────────────────────────────────────
 on:
   pull_request_target:
     types: [closed]
@@ -15,26 +7,20 @@ on:
 permissions:
   pull-requests: write
   issues: write
-  contents: write   # needed to read/write leaderboard.json in the repo
+  contents: write
 
 jobs:
   calculate-points:
-    # Only run when the PR was actually merged, not just closed/abandoned
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
 
     steps:
-      # ── Step 1: Check out the base branch so we can read/write leaderboard.json
-      # We check out the BASE repo only (not the PR's head) — this is safe with
-      # pull_request_target and avoids executing untrusted code from forks.
       - name: Checkout base repo
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.ref }}
-          # PAT_TOKEN needed — org strips write access from GITHUB_TOKEN on forks.
           token: ${{ secrets.PAT_TOKEN }}
 
-      # ── Step 2: Calculate points and update leaderboard.json ─────────────
       - name: Calculate and Award Points
         uses: actions/github-script@v7
         with:
@@ -74,12 +60,13 @@ jobs:
             const teamNumber = teamMatch[1].padStart(2, '0');
             const teamLabel  = `Team ${teamNumber}`;
 
-            // ── 2. Determine points ─────────────────────────────────────────
-            // Helper: scan an array of label name strings for a level label.
+            // ── 2. Determine points ──────────────────────────────────────────
             const levelFromLabels = (labelNames) => {
               const lower = labelNames.map(n => n.toLowerCase());
-              if (lower.includes('level-2') || lower.includes('intermediate')) return { points: 20, level: 'Level 2 — Intermediate' };
-              if (lower.includes('level-1') || lower.includes('beginner') || lower.includes('good-first-issue')) return { points: 5, level: 'Level 1 — Beginner' };
+              if (lower.includes('level-2') || lower.includes('intermediate'))
+                return { points: 20, level: 'Level 2 — Intermediate' };
+              if (lower.includes('level-1') || lower.includes('beginner') || lower.includes('good-first-issue'))
+                return { points: 5, level: 'Level 1 — Beginner' };
               return null;
             };
 
@@ -91,71 +78,53 @@ jobs:
             let pointSource = '';
 
             if (hasLinkedIssue) {
-              // ── TYPE 1: Read level from the linked ISSUE's labels ──────────
               const issueNumber = parseInt(issueMatch[3]);
               pointSource = `Linked Issue #${issueNumber}`;
-
               try {
-                const issueData  = await github.rest.issues.get({
-                  owner:        context.repo.owner,
-                  repo:         context.repo.repo,
+                const issueData   = await github.rest.issues.get({
+                  owner: context.repo.owner, repo: context.repo.repo,
                   issue_number: issueNumber
                 });
                 const issueLabels = issueData.data.labels.map(l => l.name);
                 const result      = levelFromLabels(issueLabels);
-
                 if (result) {
-                  points = result.points;
-                  level  = result.level;
+                  points = result.points; level = result.level;
                 } else {
-                  // Issue exists but has no level label — fall back to PR labels
                   const prResult = levelFromLabels(pr.labels.map(l => l.name));
                   if (prResult) {
-                    points = prResult.points;
-                    level  = prResult.level + ' (from PR label)';
+                    points = prResult.points; level = prResult.level + ' (from PR label)';
                   } else {
-                    // Neither issue nor PR has a level label — award minimum & alert admin
-                    points = 5;
-                    level  = 'Level 1 — Beginner (fallback: no level label on issue or PR)';
+                    points = 5; level = 'Level 1 — Beginner (fallback)';
                   }
                 }
               } catch (_) {
-                // Issue not found (deleted, different repo, etc.) — safe fallback
-                points = 5;
-                level  = 'Level 1 — Beginner (fallback: issue not found)';
+                points = 5; level = 'Level 1 — Beginner (fallback: issue not found)';
               }
-
             } else {
-              // ── TYPE 2: Read level from the PR's OWN labels (admin-assigned) ─
-              pointSource     = 'General Improvement PR — level assigned by admin';
-              const prResult  = levelFromLabels(pr.labels.map(l => l.name));
-
+              pointSource    = 'General Improvement PR — level assigned by admin';
+              const prResult = levelFromLabels(pr.labels.map(l => l.name));
               if (!prResult) {
-                // Admin forgot to add a level label before merging
                 await postComment(
                   `## ⚠️ Points Could Not Be Calculated\n\n` +
                   `This General Improvement PR was merged without a \`level-1\` or \`level-2\` label.\n\n` +
                   `**Admin action required:** manually add points for **${teamLabel}** in the leaderboard.\n\n` +
-                  `| Label | Points |\n` +
-                  `|---|---|\n` +
-                  `| \`level-1\` | 5 pts |\n` +
-                  `| \`level-2\` | 20 pts |` +
+                  `| Label | Points |\n|---|---|\n` +
+                  `| \`level-1\` | 5 pts |\n| \`level-2\` | 20 pts |` +
                   footer
                 );
                 return;
               }
-
               points = prResult.points;
               level  = prResult.level + ' (admin assigned)';
             }
 
-            // ── 3. Post award comment on the PR ────────────────────────────
+            // ── 3. Post award comment ────────────────────────────────────────
             await postComment(
               `## 🎉 PR Merged — Points Awarded!\n\n` +
               `Congratulations @${author}! Your contribution has been merged.\n\n` +
-              `| Field | Value |\n` +
-              `|---|---|\n` +
+              `| Field | Value |\n|---|---|\n` +
               `| **Team** | ${teamLabel} |\n` +
+              `| **Contributor** | @${author} |\n` +
               `| **Level** | ${level} |\n` +
               `| **Points Awarded** | ${points} pts |\n` +
               `| **Source** | ${pointSource} |\n\n` +
@@ -163,46 +132,92 @@ jobs:
               footer
             );
 
-            // ── 4. Update leaderboard.json ─────────────────────────────────
-            // We store scores in a JSON file in the repo so the data is durable
-            // and doesn't depend on parsing Markdown tables (which is fragile).
+            // ── 4. Load leaderboard.json ─────────────────────────────────────
+            // Structure:
+            // {
+            //   "teams": {
+            //     "Team 02": { points, prs, contributors: ["user1","user2"] }
+            //   },
+            //   "contributors": {
+            //     "user1": { points, prs, team: "Team 02" }
+            //   }
+            // }
             const LB_PATH = 'leaderboard.json';
-            let scores    = {};
+            let db = { teams: {}, contributors: {} };
 
             if (fs.existsSync(LB_PATH)) {
-              try { scores = JSON.parse(fs.readFileSync(LB_PATH, 'utf8')); } catch (_) {}
+              try { db = JSON.parse(fs.readFileSync(LB_PATH, 'utf8')); } catch (_) {}
             }
 
-            if (!scores[teamLabel]) scores[teamLabel] = { points: 0, prs: 0, contributors: [] };
-            scores[teamLabel].points += points;
-            scores[teamLabel].prs    += 1;
-            if (!scores[teamLabel].contributors.includes(author)) {
-              scores[teamLabel].contributors.push(author);
+            // Ensure structure exists
+            if (!db.teams)        db.teams        = {};
+            if (!db.contributors) db.contributors = {};
+
+            // ── Update team record ───────────────────────────────────────────
+            if (!db.teams[teamLabel]) {
+              db.teams[teamLabel] = { points: 0, prs: 0, contributors: [] };
+            }
+            db.teams[teamLabel].points += points;
+            db.teams[teamLabel].prs    += 1;
+            if (!db.teams[teamLabel].contributors.includes(author)) {
+              db.teams[teamLabel].contributors.push(author);
             }
 
-            fs.writeFileSync(LB_PATH, JSON.stringify(scores, null, 2));
+            // ── Update individual contributor record ─────────────────────────
+            if (!db.contributors[author]) {
+              db.contributors[author] = { points: 0, prs: 0, team: teamLabel };
+            }
+            db.contributors[author].points += points;
+            db.contributors[author].prs    += 1;
+            // Update team in case someone switched (edge case)
+            db.contributors[author].team = teamLabel;
 
-            // ── 5. Regenerate leaderboard.md for human-readable display ────
-            const sorted = Object.entries(scores).sort((a, b) => b[1].points - a[1].points);
-            const medals  = ['🥇', '🥈', '🥉'];
-            const rows    = sorted.map(([team, data], i) => {
-              const rank = i < 3 ? medals[i] : `${i + 1}.`;
-              return `| ${rank} | ${team} | ${data.points} | ${data.prs} | ${data.contributors.join(', ')} |`;
+            fs.writeFileSync(LB_PATH, JSON.stringify(db, null, 2));
+
+            // ── 5. Render leaderboard.md with two tables ─────────────────────
+            const medals = ['🥇', '🥈', '🥉'];
+            const now    = new Date().toUTCString();
+
+            // — Team rankings table —
+            const sortedTeams = Object.entries(db.teams)
+              .sort((a, b) => b[1].points - a[1].points || b[1].prs - a[1].prs);
+
+            const teamRows = sortedTeams.map(([team, data], i) => {
+              const rank         = i < 3 ? medals[i] : `${i + 1}.`;
+              const memberCount  = data.contributors.length;
+              const contributors = data.contributors.map(c => `@${c}`).join(', ');
+              return `| ${rank} | **${team}** | ${data.points} | ${data.prs} | ${memberCount} | ${contributors} |`;
             }).join('\n');
 
-            const now    = new Date().toUTCString();
+            // — Individual contributor table —
+            const sortedContribs = Object.entries(db.contributors)
+              .sort((a, b) => b[1].points - a[1].points || b[1].prs - a[1].prs);
+
+            const contribRows = sortedContribs.map(([user, data], i) => {
+              const rank = i < 3 ? medals[i] : `${i + 1}.`;
+              return `| ${rank} | @${user} | ${data.team} | ${data.points} | ${data.prs} |`;
+            }).join('\n');
+
             const mdBody =
-              `# GDG CHARUSAT Open Source Contri Sprintathon — Leaderboard\n\n` +
+              `# 🏆 GDG CHARUSAT Open Source Contri Sprintathon — Leaderboard\n\n` +
               `> **Last Updated:** ${now}\n\n` +
               `---\n\n` +
-              `## 🏆 Scores\n\n` +
-              `| Rank | Team | Points | PRs Merged | Contributors |\n` +
-              `|------|------|--------|------------|-------------|\n` +
-              (rows || `| — | No contributions yet | 0 | 0 | — |`) +
+
+              `## 👥 Team Rankings\n\n` +
+              `| Rank | Team | Total Points | PRs Merged | Members | Contributors |\n` +
+              `|------|------|:------------:|:----------:|:-------:|--------------|\n` +
+              (teamRows || `| — | No teams yet | 0 | 0 | 0 | — |`) +
               `\n\n---\n\n` +
+
+              `## 🧑‍💻 Individual Contributors\n\n` +
+              `| Rank | GitHub | Team | Points | PRs Merged |\n` +
+              `|------|--------|------|:------:|:----------:|\n` +
+              (contribRows || `| — | No contributors yet | — | 0 | 0 |`) +
+              `\n\n---\n\n` +
+
               `## Points System\n\n` +
               `| Level | Label | Points |\n` +
-              `|-------|-------|--------|\n` +
+              `|-------|-------|:------:|\n` +
               `| Beginner | \`level-1\` / \`good-first-issue\` | 5 pts |\n` +
               `| Intermediate | \`level-2\` / \`intermediate\` | 20 pts |\n` +
               `| General Improvement | Admin assigns level on PR | 5 or 20 pts |\n\n` +
@@ -210,14 +225,12 @@ jobs:
               `*Auto-updated on every merged PR · Maintained by GDG CHARUSAT*\n`;
 
             fs.writeFileSync('leaderboard.md', mdBody);
-            core.info(`Leaderboard updated for ${teamLabel}: +${points} pts`);
+            core.info(`✅ Leaderboard updated — ${teamLabel} / @${author}: +${points} pts`);
 
-      # ── Step 3: Commit leaderboard.json + leaderboard.md back to the repo ─
       - name: Commit leaderboard update
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add leaderboard.json leaderboard.md
-          # Only commit if something actually changed (idempotent)
           git diff --staged --quiet || git commit -m "chore: update leaderboard [skip ci]"
           git push
