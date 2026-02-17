@@ -29,6 +29,21 @@ Thank you for your interest in contributing to **Zaplink** as part of the **GDG 
 
 ---
 
+## 🔐 Environment Variables & Secrets
+
+Some issues may require environment variables (API keys, secrets, credentials, etc.).
+
+🚨 **Do NOT ask for environment variables in issues or pull requests.**  
+🚨 **Do NOT commit secrets to the repository.**
+
+If you need environment variables to work on an assigned issue, please contact the organizers privately:
+
+- 📱 **WhatsApp:** +91-8347036131
+- 📧 **Email:** jadejakrishnapal04@gmail.com
+
+Environment details will be shared **only after the issue is officially assigned to you**.
+
+
 ## 📋 Table of Contents
 
 - [Tech Stack](#tech-stack)
